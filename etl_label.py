@@ -82,7 +82,7 @@ class etl_label:
       for raw_std_filed, raw_sheet_word in self.raw_header_loc_char_dict.items():
         # (0,gid)(1,realname)(2,certid)(3,mobile)
         for s_index, sheet_col_word in enumerate(self.sheet_char_index):
-          if sheet_col_word == raw_sheet_word:
+          if sheet_col_word.upper() == raw_sheet_word.upper():
             print("*****")
             origin_col = self._rawdata.columns[s_index]
             print("原始列名： %s ,标准列名： %s" % (origin_col, raw_std_filed))
@@ -164,7 +164,7 @@ if __name__ == '__main__':
     batch = 'p13'
     #"realname","certid","mobile","card","apply_time","y_label"
     raw_header_loc_num_list = ()
-    raw_header_loc_char_dict= {'realname':'G','certid':'I','mobile':'J','apply_time':'C' }
+    raw_header_loc_char_dict= {'realname':'g','certid':'i','mobile':'j','apply_time':'c' }
     etl=etl_label(path,sheetname,sensor,dataFiled,phoneFiled,raw_header_loc_char_dict,raw_header_loc_num_list,client_nmbr,batch)
     #fd=etl.re_construct_df()
     #news=etl.md5_gid_df(fd)
