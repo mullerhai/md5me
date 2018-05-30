@@ -2,10 +2,11 @@ import pandas  as pd
 import  numpy  as  np
 
 import  hashlib
+import os
 
 class ETL_Label:
   #初始化 会读取文件 ，并对文件做最初步的清洗
-  def __init__(self,file_path,sheet_name,sense_code,date_filed,phone_filed,raw_header_loc_char_dict={},raw_header_loc=(),client_nmbr="AA00",batch="p0",header=0,encoding='gbk',export_etl_xlsx_file="data/new_etl.xlsx"):
+  def __init__(self,file_path,raw_header_loc_char_dict,sense_code,date_filed,phone_filed,sheet_name='Sheet1',client_nmbr="AA00",batch="p0",header=0,encoding='gbk',raw_header_loc=()):
     #标准的 入库 列名 顺序
     self.std_filed_list=("gid","realname","certid","mobile","card","apply_time","y_label","apply_amount","apply_period","overdus_day","sense_code")
     col_index=(f  for f in range(0,11))
@@ -30,8 +31,12 @@ class ETL_Label:
     self.phone_filed=phone_filed
     # 实际 清洗excel 文件 原始列名 与标准的 入库 列名 索引的对应字典
     self.raw_header_loc = raw_header_loc
+    #获取当前执行路径
+    dir=os.getcwd()
+    # 要导出的 清洗后的 txt csv文件名称及路径
+    self.export_txtfile_path=dir+'/data/%s_%s_new_etl.txt'%(self.client_nmbr,self.batch)
     #要导出的 清洗后的 excel 文件名称及路径
-    self.export_etl_xlsx_file=export_etl_xlsx_file
+    self.export_etl_xlsx_file=dir+'/data/%s_%s_new_etl.xlsx'%(self.client_nmbr,self.batch)
     #加载 要读取 清洗的excel 文件
     self._rawdata=pd.read_excel(self.file_path,sheet_name=self.sheet_name,header=header,encoding=encoding,parse_dates=[self.date_filed],dtype={self.phone_filed:np.str})
     try:
@@ -137,10 +142,10 @@ class ETL_Label:
     return nwedate
 
 # 生成最终的 txt 和 excel 文件  保存在磁盘
-  def  save_export_files(self,df,export_txtfile_path,is_export_excel=False,header=False,encoding='utf-8',sep='\t',index=False):
+  def  save_export_files(self,df,is_export_excel=False,csv_header=False,encoding='utf-8',sep='\t',index=False):
 
-    df.to_csv(export_txtfile_path,encoding=encoding,header=header,sep=sep,index=index)
-    print("导出最终txt  文件成功，txt路径 ：%s"%export_txtfile_path)
+    df.to_csv(self.export_txtfile_path,encoding=encoding,header=csv_header,sep=sep,index=index)
+    print("导出最终txt  文件成功，txt路径 ：%s"%self.export_txtfile_path)
     if is_export_excel :
       df.to_excel(self.export_etl_xlsx_file,encoding=encoding,index=index)
       print("导出最终excel 文件成功，excel 路径： %s"%self.export_etl_xlsx_file)
@@ -168,11 +173,11 @@ if __name__ == '__main__':
     raw_header_loc=(5,1,2,3)
     raw_header_loc_num_list = ()
     raw_header_loc_char_dict= {'realname':'b','certid':'c','mobile':'d','card':'*','apply_time':'a','y_label':'*','apply_amount':'*','apply_period':'*','overdus_day':'*','sense_code':'*' }
-    etl=ETL_Label(file_path,sheetname,sense_code,dataFiled,phoneFiled,raw_header_loc_char_dict,raw_header_loc_num_list,client_nmbr,batch,export_etl_xlsx_file=export_etl_xlsx_file)
+    etl=ETL_Label(file_path,raw_header_loc_char_dict,sense_code,dataFiled,phoneFiled,sheetname,client_nmbr,batch)
     #fd=etl.re_construct_df()
     #news=etl.md5_gid_df(fd)
     df=etl.re_construct_df_by_raw_header_loc_char_dict()
-    etl.save_export_files(df,export_txtfile_path,is_export_excel=True,header=True)
+    etl.save_export_files(df,is_export_excel=True,csv_header=True)
     #fd.to_excel(res_file,encoding='utf-8')
     print(df.head())
 
