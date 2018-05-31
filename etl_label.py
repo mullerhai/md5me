@@ -5,10 +5,12 @@ import  hashlib
 import os
 from  configparser import  ConfigParser
 import  ast
-import  time
 import traceback
-import sys
 import logging
+import paramiko
+import sys
+import  time
+import  threading
 logger = logging.getLogger(
     name=__name__,
 )
@@ -39,6 +41,7 @@ class ETL_Label:
     # client_nmbr
     self.client_nmbr=self.config_parser.get(conf_sec,'client_nmbr')
     self.batch=self.config_parser.get(conf_sec,'batch')
+    #self.hive_host =self.config_parser.get(conf_sec, 'hive_host')
     #场景
     self.sense_code=self.config_parser.get(conf_sec,'sense_code')
     #标准列名 apply_time对应的原始 excel 表格 业务列名
@@ -177,12 +180,12 @@ class ETL_Label:
       logger.info(msg="导出最终excel 文件成功，excel 路径： %s"%self.export_etl_xlsx_file)
 
     #上传到ftp 上 mac  unix dir_sep is /, mayby windows system is  \
-  def  ftp_to_sever(self,config_ftp_sec='sec_ftps_login',upload_etl_file='',dir_sep='/'):
-    host=self.config_parser.get(config_ftp_sec,'host')
-    user=self.config_parser.get(config_ftp_sec,'user')
-    pwd=self.config_parser.get(config_ftp_sec,'pwd')
-    port=self.config_parser.get(config_ftp_sec,'port')
-    server_path=self.config_parser.get(config_ftp_sec,'server_path')
+  def  put_etlfile_ftp(self,config_ftp_sec='sec_ftps_login',upload_etl_file='',dir_sep='/'):
+    host=self.config_parser.get(config_ftp_sec,'ftp_host')
+    user=self.config_parser.get(config_ftp_sec,'ftp_user')
+    pwd=self.config_parser.get(config_ftp_sec,'ftp_pwd')
+    port=self.config_parser.get(config_ftp_sec,'ftp_port')
+    server_path=self.config_parser.get(config_ftp_sec,'ftp_server_path')
     if upload_etl_file=='':
       upload_etl_file=self.export_txtfile_path
     server_file_name=str(upload_etl_file).split(dir_sep)[-1]
@@ -199,68 +202,98 @@ class ETL_Label:
       logger.info(msg="上传失败请检查 ,error %s"%ex)
       traceback.print_exc()
 
-#将刚刚上传到ftp文件 再 put到hive 的那台机器
-  def push_ftpfile_server(self,sec_push_hive_dir='sec_push_hive_dir',server_file_name=''):
+#获取 跳板机 ssh server
+  def  get_jumper_ssh_session(self,sec_remote_host = 'sec_remote_host'):
+    self.jumper_ssh_session = paramiko.SSHClient()
+    self.jumper_ssh_session.set_missing_host_key_policy(
+      paramiko.AutoAddPolicy(),
+    )
+    try:
+      self.jumper_ssh_session.connect(
+        hostname=self.config_parser.get(sec_remote_host, 'jump_host'),
+        port=self.config_parser.get(sec_remote_host, 'jump_port'),
+        username=self.config_parser.get(sec_remote_host, 'jump_user'),
+        password=self.config_parser.get(sec_remote_host, 'jump_pwd')
+      )
+      if self.jumper_ssh_session != None:
+        logger.info(msg="jumper_ssh_session get successfully")
+      else:
+        logger.error(msg="failed to get jumper_ssh_session ")
+    except Exception as ex:
+      logger.error(msg="failed to get jumper_ssh_session by error %s "%ex)
+      raise
 
-    host=self.config_parser.get(sec_push_hive_dir,'host')
-    port=self.config_parser.get(sec_push_hive_dir,'port')
-    server_dir_path=self.config_parser.get(sec_push_hive_dir,'server_dir_path')
-    ftpget_login=self.config_parser.get(sec_push_hive_dir, 'ftpget_login')
+# 在跳板机执行命令
+  def  exec_jump_hive_command(self,hive_host,cmd_str):
+    if self.jumper_ssh_session != None:
+        logging.info(msg="jump_hive host %s will exec__command  %s"%(hive_host,cmd_str))
+        final_cmd_str='ssh  %s -t %s'%(hive_host,cmd_str)
+        stdin, stdout, stderr = self.jumper_ssh_session.exec_command(final_cmd_str)
+        channel = stdout.channel
+        status = channel.recv_exit_status()
+        if status ==0:
+          logging.info(msg="exec_jump_hive_command %s successfully"%cmd_str)
+          return status
+        else:
+          logging.error(msg="failed to  exec_jump_hive_command %s "%cmd_str)
+          return 1
 
-    logger.info(msg="将文件push 到 dir: %s  hive client 机器 host %s port: %s ,ftpget 字符串 %s "%(server_dir_path,host,port,ftpget_login))
+    # 执行 hive 入库操作
+  def _exec_data_insert_hive(self, hive_host, exec_hive_cmd):
+      logger.info(msg=exec_hive_cmd)
+      logger.info(msg="will insert data please  waiting for  some minutes !!! util to console feed up ")
+      try:
+        exe_status = self.exec_jump_hive_command(hive_host, exec_hive_cmd)
+        if exe_status == int(0):
+          logger.info(msg="exec third command insert  data to hive database  successfully" )
+        else:
+          logger.error(msg="failed insert data to hive database ,please check !!!" )
+      except Exception as ex:
+        logger.error(msg="failed insert  data to hive database ,please check the error %s !!!" %ex)
+        raise
+
+        #在跳板执行 从ftp服务器拉取 文件 到 转移文件路径 到执行脚本入库
+  def exec_ftp_get_mv_insert_command(self,sec_remote_host='sec_remote_host',dir_sep='/'):
+    self.get_jumper_ssh_session()
+    hivehost =self.config_parser.get(sec_remote_host,'hive_host' )
+    hive_server_dir_path =self.config_parser.get(sec_remote_host,'hive_server_dir_path')
+    ftpget_login =self.config_parser.get(sec_remote_host, 'ftpget_login')
+    ftp_file_dir=self.config_parser.get(sec_remote_host, 'ftp_file_dir')
+    ftp_etl_file=str(self.export_txtfile_path).split(dir_sep)[-1]
+    try:
+      ftp_get_cmd='%s/%s/%s'%(ftpget_login,ftp_file_dir,ftp_etl_file)
+      mv_file_cmd = 'mv  %s  %s ' % (ftp_etl_file, hive_server_dir_path)
+      exec_hive_cmd='sh   %s/load_label.sh  %s  %s  %s' % (hive_server_dir_path,ftp_etl_file,self.client_nmbr,self.batch)
+      logger.info(msg=ftp_get_cmd)
+      #ftp_get_cmd ='ssh 172.16.16.31
+      status=self.exec_jump_hive_command(hivehost,ftp_get_cmd)
+      if  status==int(0):
+        logger.info(msg=mv_file_cmd)
+        mv_status=self.exec_jump_hive_command(hivehost,mv_file_cmd)
+        logger.info(msg="exec second command  mv file command:  success " )
+        if  mv_status==int(0):
+          self._exec_data_insert_hive(hivehost,exec_hive_cmd)
+      else :
+        logging.warning(msg="first command is failed")
+    except Exception as ex:
+      logging.error(msg=ex)
 
 
-#执行 hive 入库操作
-  def  _exec_hive(self,script_path,etl_file_path):
-    client_nmbr=self.client_nmbr
-    batch=self.batch
-
-    logger.info(msg="error")
 
 
+def etl_sample_for_AA99_p1_():
+  conf_sec = 'section_etl_excel_label_AA100_p1'
+  etl = ETL_Label(conf_sec=conf_sec)
+  dic = etl.config_parser.get(conf_sec, 'raw_header_loc_char_dict')
+  print(dic)
+  dics = ast.literal_eval(dic)
+  for k, v in dics.items():
+    print('k: %s, V: %s' % (k, v))
+  df = etl.re_construct_df_by_raw_header_loc_char_dict()
+  etl.save_export_files(df, is_export_excel=True, csv_header=False)
+  print(df.head())
+  etl.put_etlfile_ftp()
+  etl.exec_ftp_get_mv_insert_command()
 
 if __name__ == '__main__':
-    file_path="data/AA98p1_20180529.xlsx"
-    export_txtfile_path="data/AA98p1_20180529.txt"
-    export_etl_xlsx_file="data/AA98p1_201805.xlsx"
-    sheetname='Sheet1'
-    sense_code="线上现金分期"
-    dataFiled="app_date"
-    phoneFiled="phone1"
-    client_nmbr="AA98"
-    batch='p1'
-    config_sec=''
-    raw_header_loc=(5,1,2,3)
-    raw_header_loc_num_list = ()
-    raw_header_loc_char_dict= {'realname':'b','certid':'c','mobile':'d','card':'*','apply_time':'a','y_label':'*','apply_amount':'*','apply_period':'*','overdus_day':'*','sense_code':'*' }
-    etl=ETL_Label(config_sec)
-    #fd=etl.re_construct_df()  ,sense_code,dataFiled,phoneFiled,sheetname,client_nmbr,batch
-    #news=etl.md5_gid_df(fd)
-    df=etl.re_construct_df_by_raw_header_loc_char_dict()
-    etl.save_export_files(df,is_export_excel=True,csv_header=True)
-    #fd.to_excel(res_file,encoding='utf-8')
-    print(df.head())
-
-
-
-def  ts():
-    print("last code")
-    # path="data/AA95p1_20test.xlsx"
-    # sheetname='mo'
-    # sense_code="线下消费分期"
-    # dataFiled="申请时间"
-    # phoneFiled="手机号"
-    # res_file_path ="data/AA95p1_20test.txt"
-    # client_nmbr = "AA95"
-    # batch = 'p1'
-    # raw_header_loc = (1, 2,3,5)
-    # path = "data/AA51p13_201805.xlsx"
-    # res_file_path = "data/AA51p13_201805.txt"
-    # res_file = "data/AA51p13_2018_etl.xlsx"
-    # sheetname = 'Sheet1'
-    # sense_code = "线上现金分期"
-    # dataFiled = "DATE_DECISION"
-    # phoneFiled = "解密手机号"
-    # client_nmbr = "AA51"
-    # batch = 'p13'
-    #"realname","certid","mobile","card","apply_time","y_label"
+  etl_sample_for_AA99_p1_()
